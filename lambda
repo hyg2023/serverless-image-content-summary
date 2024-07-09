@@ -1,0 +1,71 @@
+import json
+import boto3
+import base64
+import datetime
+
+def lambda_handler(event, context):
+    # Fetch image data from S3 event
+    bucket = event['Records'][0]['s3']['bucket']['name']
+    key = event['Records'][0]['s3']['object']['key']
+    
+    # Get image data from S3
+    s3 = boto3.client('s3')
+    image_obj = s3.get_object(Bucket=bucket, Key=key)
+    image_data = image_obj['Body'].read()
+    
+    # Encode image to base64
+    encoded_image = base64.b64encode(image_data).decode('utf-8')
+    
+    # Prepare request body
+    body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 512,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": encoded_image
+                        }
+                    },
+                    {
+                        "type": "text",
+                        "text": "Summarize the content of this image."
+                    }
+                ]
+            }
+        ]
+    }
+    
+    # Invoke Claude-3-Sonnet model
+    bedrock = boto3.client('bedrock-runtime')
+    model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
+    response = bedrock.invoke_model(
+        body=json.dumps(body),
+        modelId=model_id,
+        accept="application/json",
+        contentType="application/json"
+    )
+    
+    # Extract summary from response
+    response_body = json.loads(response['body'].read())
+    summary = response_body['content'][0]['text']
+    #Write images metadata and summary to dynamodb
+    ddb_client = boto3.client('dynamodb',region_name='us-west-2')
+    image_handle_time = str(datetime.datetime.now())
+    table = "BedrockImageContentSummary"
+    item = {'ImageName': {'S': key}, 'ImageHandleTime':{'S': image_handle_time}, 'ImageContent':{'S': summary}}
+    ddb_response = ddb_client.put_item(TableName=table,Item=item)
+    status_code = ddb_response['ResponseMetadata']['HTTPStatusCode']
+    return {
+        'statusCode': status_code
+        }
+
+
+
+
+
